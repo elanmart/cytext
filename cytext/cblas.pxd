@@ -1,27 +1,20 @@
-# cython: boundscheck=False
-# cython: wraparound=False
-# cython: nonecheck=False
-# cython: overflowcheck=False
-# cython: initializedcheck=False
-# cython: cdivision=True
+# distutils: language=c++
 
-
-from typedef import float32, int32, uint8
+from .typedefs cimport real, int32, real, FloatVector, FloatMatrix
 
 from libc.string cimport memset
-from libc.math   cimport sqrt, exp as c_exp
-from random      cimport mt19937, uniform_int_distribution
+from libc.math   cimport (sqrt, exp as c_exp)
 
 
 cdef extern from "cblas.h" nogil:
     enum CBLAS_ORDER: CblasRowMajor, CblasColMajor
     enum CBLAS_TRANSPOSE: CblasNoTrans, CblasTrans, CblasConjTrans
 
-    inline float32 cblas_sdot(int N, float32  *x, int dx, float32  *y, int dy)
-    inline void  cblas_sscal(int N, float32  alpha, float32  *x, int dx)
-    inline void  cblas_saxpy(int N, float32  alpha, float32  *x, int dx, float32  *y, int dy)
-    inline void  cblas_scopy(int N, float32  *x, int dx, float32  *y, int dy)
-    inline void  cblas_sgemv(CBLAS_ORDER Order, CBLAS_TRANSPOSE TransA, int M, int N,
+    real cblas_sdot(int N, real  *x, int dx, real  *y, int dy)
+    void  cblas_sscal(int N, real  alpha, real  *x, int dx)
+    void  cblas_saxpy(int N, real  alpha, real  *x, int dx, real  *y, int dy)
+    void  cblas_scopy(int N, real  *x, int dx, real  *y, int dy)
+    void  cblas_sgemv(CBLAS_ORDER Order, CBLAS_TRANSPOSE TransA, int M, int N,
                                  float  alpha, float  *A, int lda, float  *x, int incX,
                                  float  beta, float  *y, int incY)
 
@@ -29,39 +22,61 @@ cdef extern from "cblas.h" nogil:
 
 
 # ---------------------------------------------
-cdef inline float32 dot(float32[::1] x, float32[::1] y) nogil:
+cdef inline real dot(FloatVector x, FloatVector y) nogil:
     return cblas_sdot(x.shape[0], &x[0], 1, &y[0], 1)
 
 
-cdef inline float32 scale(float32[::1] vec, float32 alpha) nogil:
+cdef inline real scale(FloatVector vec, real alpha) nogil:
     cblas_sscal(vec.shape[0], alpha, &vec[0], 1)
 
 
-cdef inline void axpy(float32[::1] x, float32 a, float32[::1] y) nogil:
+cdef inline void axpy(FloatVector x, real a, FloatVector y) nogil:
     cblas_saxpy(x.shape[0], a, &x[0], 1, &y[0], 1)
 
 
-cdef inline void copy(float32[::1] src, float32[::1] dest) nogil:
-    cblas_scopy(src.shape[0], &src[0], 1, &dest[0], 1)
-
-
-cdef inline void zero(float32[::1] x) nogil:
-    memset(&x[0], 0, x.shape[0] * sizeof(float32))
-
-
-cdef inline void unsafe_axpy(int N, float32* x, float32 a, float32* y) nogil:
+cdef inline void unsafe_axpy(int N, real* x, real a, real* y) nogil:
     cblas_saxpy(N, a, x, 1, y, 1)
 
 
-cdef inline void mul(float32[:,::1] M, float32[::1] x, float32[::1] dest) nogil:
-    cblas_sgemv(CblasRowMajor, CblasNoTrans, M.shape[0], M.shape[1], 1., &M[0,0], M.shape[1], &x[0], 1, 0., &dest[0], 1)
+cdef inline void copy(FloatVector src, FloatVector dest) nogil:
+    cblas_scopy(src.shape[0], &src[0], 1, &dest[0], 1)
 
 
-cdef inline void constraint(float32[::1] vec, float32 max_norm) nogil:
+cdef inline void zero(FloatVector x) nogil:
+    memset(&x[0], 0, x.shape[0] * sizeof(real))
+    
+cdef inline real sum(FloatVector x) nogil:
     cdef:
         int32 i
-        float32 z
-        float32 scaling_factor
+        real _s = 0.
+
+    for i in range(x.shape[0]):
+        _s += x[i]
+
+    return _s
+
+cdef inline void mul(FloatMatrix matrix, FloatVector vector, FloatVector out) nogil:
+    cblas_sgemv(
+        CblasRowMajor,
+        CblasNoTrans,
+        matrix.shape[0],
+        matrix.shape[1],
+        1.,
+        &matrix[0, 0],
+        matrix.shape[1],
+        &vector[0],
+        1,
+        0.,
+        &out[0],
+        1
+    )
+
+
+cdef inline void normalize(FloatVector vec, real max_norm) nogil:
+    cdef:
+        int32 i
+        real z
+        real scaling_factor
 
     z = 0.
     for i in range(vec.shape[0]):
@@ -74,7 +89,7 @@ cdef inline void constraint(float32[::1] vec, float32 max_norm) nogil:
             vec[i] *= scaling_factor
 
 
-cdef inline void sub(float32[::1] v1, float32[::1] v2, float32[::1] dest) nogil:
+cdef inline void sub(FloatVector v1, FloatVector v2, FloatVector dest) nogil:
     cdef:
         int32 i
 
@@ -82,9 +97,9 @@ cdef inline void sub(float32[::1] v1, float32[::1] v2, float32[::1] dest) nogil:
         dest[i] = v1[i] - v2[i]
 
 
-cdef inline void softmax(float32[::1] vec) nogil:
+cdef inline void softmax(FloatVector vec) nogil:
     cdef:
-        float32 _max, z
+        real _max, z
         int32 i, n
 
     _max = vec[0]
@@ -102,10 +117,10 @@ cdef inline void softmax(float32[::1] vec) nogil:
         vec[i] /= z
 
 
-cdef inline void normalize(float32[::1] vec) nogil:
+cdef inline void unit_norm(FloatVector vec) nogil:
     cdef:
         int32 i
-        float32 _sum, val
+        real _sum, val
 
     _sum = 0.
     for i in range(vec.shape[0]):
@@ -118,17 +133,3 @@ cdef inline void normalize(float32[::1] vec) nogil:
     _sum = sqrt(_sum)
     for i in range(vec.shape[0]):
         vec[i] /= _sum
-
-
-cdef inline int32 unif(int32 l, int32 h) nogil:
-    cdef:
-        mt19937 engine
-        uniform_int_distribution[int32] uniform
-        int32 r
-
-    engine  = mt19937(42)
-    uniform = uniform_int_distribution[int32](l, h)
-
-    r = uniform(engine)
-
-    return r
